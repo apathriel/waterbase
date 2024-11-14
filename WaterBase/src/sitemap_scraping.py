@@ -1,15 +1,15 @@
 import json
-from pathlib import Path
 import random
 import time
-from typing import List
 import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import List, Optional
 
-from playwright.sync_api import sync_playwright, Page
 import requests
+from playwright.sync_api import Page, sync_playwright
 from tqdm import tqdm
 
-from utils.logger_utils import get_logger
+from .utils.logger_utils import get_logger
 
 logger = get_logger(__name__, "INFO")
 
@@ -30,6 +30,19 @@ class SitemapScraper:
     @property
     def urls(self) -> List[str]:
         return self._urls
+
+    @urls.setter
+    def urls(self, new_urls: List[str]) -> None:
+        if not isinstance(new_urls, list):
+            raise TypeError("URLs must be provided as a list")
+
+        # Validate all elements are non-empty strings
+        if not all(isinstance(url, str) and url.strip() for url in new_urls):
+            raise ValueError("All URLs must be non-empty strings")
+
+        # Store cleaned URLs
+        self._urls = [url.strip() for url in new_urls]
+        logger.info(f"Updated URLs list with {len(self._urls)} items")
 
     def sample_urls(self, n: int = 1) -> List[str]:
         if not self._urls:
@@ -55,7 +68,7 @@ class SitemapScraper:
             return []
 
     @staticmethod
-    def fetch_sitemap_by_url(url: str) -> List[str]:
+    def fetch_sitemap_by_url(url: str) -> Optional[str]:
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
         sitemap_url = f"{url.rstrip('/')}/sitemap.xml"
@@ -69,7 +82,7 @@ class SitemapScraper:
             return None
 
     @staticmethod
-    def fetch_sitemap_from_file(file_path: str) -> str:
+    def fetch_sitemap_from_file(file_path: str) -> Optional[str]:
         try:
             with open(file_path, "r", encoding="utf-8") as file:
                 return file.read()  # Read entire file as single string
@@ -78,8 +91,8 @@ class SitemapScraper:
             return None
 
     def parse_sitemap(
-        self, sitemap_url: str = None, sitemap_file_path: str = None
-    ) -> List[str]:
+        self, sitemap_url: Optional[str] = None, sitemap_file_path: Optional[str] = None
+    ) -> Optional[List[str]]:
         if sitemap_url:
             sitemap = self.fetch_sitemap_by_url(sitemap_url)
         elif sitemap_file_path:
@@ -90,13 +103,17 @@ class SitemapScraper:
             # Handle different sitemap namespaces
             namespaces = {"ns": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
-            # Extract URLs from sitemap
-            self._urls = [
-                url.text for url in root.findall(".//ns:url/ns:loc", namespaces)
+            extracted_urls = [
+                url.text
+                for url in root.findall(".//ns:url/ns:loc", namespaces)
+                if url.text is not None
             ]
+            # Extract URLs from sitemap
+            self.urls = extracted_urls
+
             logger.info(f"Found {len(self._urls)} URLs in sitemap")
             logger.debug(f"URLs: {self._urls}")
-            return self._urls
+            return self.urls
         else:
             logger.error("No sitemap found")
             return None
@@ -121,18 +138,6 @@ class SitemapScraper:
                         if(sectionText) content.push(sectionText);
                     });
                     return content.join('\\n\\n');
-                }"""
-                ),
-                "headings": page.evaluate(
-                    """() => {
-                    const headings = [];
-                    document.querySelectorAll('h1, h2, h3').forEach(h => {
-                        headings.push({
-                            level: parseInt(h.tagName[1]),
-                            text: h.innerText.trim()
-                        });
-                    });
-                    return headings;
                 }"""
                 ),
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
