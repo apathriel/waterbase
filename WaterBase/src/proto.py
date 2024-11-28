@@ -1,11 +1,11 @@
 import asyncio
-import sys
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
 import aiohttp
 import pandas as pd
 from playwright.async_api import async_playwright
+from url_normalize import url_normalize
 from utils.logger_utils import get_logger
 
 logger = get_logger(__name__, "INFO")
@@ -70,6 +70,7 @@ class WebCrawler:
         try:
             logger.info(f"Crawling: {url}")
             await page.goto(url)
+            await page.wait_for_load_state("networkidle")
             links = await page.evaluate(
                 """
                 [...document.querySelectorAll('a[href], button[data-href], [onclick]')].map(el => el.href || el.dataset.href || el.onclick)
