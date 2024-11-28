@@ -39,7 +39,8 @@ class WebCrawler:
         self.base_url = base_url
         self.robot_parser = CustomRobotFileParser(base_url)
         self.visited_urls = set()
-        self.found_links = []
+        self.found_links_data = []
+        self.urls_per_depth = {}
         self.max_depth = max_depth
         self.semaphore = asyncio.Semaphore(max_concurrent_tasks)
         self.session = None
@@ -69,15 +70,19 @@ class WebCrawler:
         try:
             logger.info(f"Crawling: {url}")
             await page.goto(url)
-            links = await page.eval_on_selector_all(
-                "a[href]", "elements => elements.map(el => el.href)"
+            links = await page.evaluate(
+                """
+                [...document.querySelectorAll('a[href], button[data-href], [onclick]')].map(el => el.href || el.dataset.href || el.onclick)
+            """
             )
-            return set(urljoin(url, link) for link in links)
+            absolute_links = set(urljoin(url, link) for link in links)
+            logger.info(f"Found {len(absolute_links)} links on {url}")
+            return absolute_links
         except Exception as e:
             logger.error(f"Error fetching links from {url}: {e}")
             return set()
 
-    async def _get_url_type(self, url):
+    async def _get_url_type(self, url, fallback_to_head=False):
         parsed_url = urlparse(url)
         path = parsed_url.path.lower()
 
@@ -92,44 +97,51 @@ class WebCrawler:
             return "audio"
 
         # Use a HEAD request if extension-based inference fails
-        try:
-            logger.warning(f"Could not determine type for {url}. Using HEAD request.")
-            async with self.session.head(url, allow_redirects=True) as response:
-                content_type = response.headers.get("Content-Type", "").lower()
-                if "image" in content_type:
-                    return "image"
-                if "pdf" in content_type:
-                    return "document"
-                if "video" in content_type:
-                    return "video"
-                if "audio" in content_type:
-                    return "audio"
-                if "text/html" in content_type:
-                    return "webpage"
-        except Exception as e:
-            logger.debug(f"Error determining type for {url}: {e}")
-        return "unknown"
+        if fallback_to_head:
+            try:
+                logger.warning(
+                    f"Could not determine type for {url}. Using HEAD request."
+                )
+                async with self.session.head(url, allow_redirects=True) as response:
+                    content_type = response.headers.get("Content-Type", "").lower()
+                    if "image" in content_type:
+                        return "image"
+                    if "pdf" in content_type:
+                        return "document"
+                    if "video" in content_type:
+                        return "video"
+                    if "audio" in content_type:
+                        return "audio"
+                    if "text/html" in content_type:
+                        return "webpage"
+            except Exception as e:
+                logger.debug(f"Error determining type for {url}: {e}")
+            return "unknown"
+        else:
+            return "unknown"
 
     async def crawl(self, url, context, depth=0):
         async with self.semaphore:
             if url in self.visited_urls or depth > self.max_depth:
                 return
             self.visited_urls.add(url)
+            self.urls_per_depth[depth] = self.urls_per_depth.get(depth, 0) + 1
+
             is_allowed = self.robot_parser.can_fetch("*", url)
 
             # Determine URL type
-            # url_type = await self._get_url_type(url)
+            url_type = await self._get_url_type(url)
 
             # Extract main endpoint
             parsed_url = urlparse(url)
             main_endpoint = parsed_url.path.lstrip("/").split("/")[0]
 
             # Save the result
-            self.found_links.append(
+            self.found_links_data.append(
                 {
                     "url": url,
                     "allowed": is_allowed,
-                    # "type": url_type,
+                    "type": url_type,
                     "main_endpoint": main_endpoint,
                 }
             )
@@ -154,7 +166,7 @@ class WebCrawler:
         Save results to CSV using Pandas.
         """
         logger.info(f"Saving results to {filename}...")
-        df = pd.DataFrame(self.found_links)
+        df = pd.DataFrame(self.found_links_data)
         df.to_csv(filename, index=False)
 
     async def run(self):
@@ -167,7 +179,11 @@ class WebCrawler:
                 await self.crawl(self.base_url, context)
 
                 await browser.close()
-                logger.info(f"Crawl completed. Found {len(self.found_links)} links.")
+                logger.info(
+                    f"Crawl completed. Found {len(self.found_links_data)} links."
+                )
+                logger.info(f"Total unique links discovered: {len(self.visited_urls)}")
+                logger.info(f"URLs crawled per depth: {self.urls_per_depth}")
         except KeyboardInterrupt:
             logger.warning("Crawl interrupted. Saving progress...")
         finally:
@@ -176,7 +192,7 @@ class WebCrawler:
 
 async def main():
     base_url = "https://www.aarhusvand.dk"
-    async with WebCrawler(base_url, max_depth=1) as crawler:
+    async with WebCrawler(base_url, max_depth=3) as crawler:
         await crawler.run()
 
 
