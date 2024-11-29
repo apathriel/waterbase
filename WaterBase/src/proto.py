@@ -13,6 +13,11 @@ from utils.logger_utils import get_logger
 logger = get_logger(__name__, "INFO")
 
 
+class DatabaseManager:
+    def __init__():
+        pass
+
+
 class CustomRobotFileParser(RobotFileParser):
     def __init__(self, url):
         super().__init__(url)
@@ -37,7 +42,7 @@ class CustomRobotFileParser(RobotFileParser):
 
 
 class WebCrawler:
-    def __init__(self, base_url, max_depth=1, max_concurrent_tasks=10, user_agent=None):
+    def __init__(self, base_url, max_depth=1, max_concurrent_tasks=50, user_agent=None):
         self.base_url = base_url
         self.max_depth = max_depth
         self.user_agent = user_agent or "*"
@@ -50,7 +55,7 @@ class WebCrawler:
         self.semaphore = asyncio.Semaphore(max_concurrent_tasks)
         self.session = None
         self.progress_bar = None
-        self.queue = deque()
+        self.queue = asyncio.Queue()
 
     async def __aenter__(self):
         """Create a single aiohttp session for multiple requests"""
@@ -131,9 +136,9 @@ class WebCrawler:
             return "unknown"
 
     async def crawl(self, url, context, depth=0):
-        self.queue.append((url, depth))
-        while self.queue:
-            current_url, current_depth = self.queue.popleft()
+        await self.queue.put((url, depth))
+        while not self.queue.empty():
+            current_url, current_depth = await self.queue.get()
             normalized_url = url_normalize(current_url)
             if normalized_url in self.visited_urls or current_depth > self.max_depth:
                 continue
@@ -172,7 +177,7 @@ class WebCrawler:
 
                 for link in links:
                     if link.startswith(self.base_url) and link not in self.visited_urls:
-                        self.queue.append((link, current_depth + 1))
+                        await self.queue.put((link, current_depth + 1))
             except Exception as e:
                 logger.error(f"Error crawling {current_url}: {e}")
             finally:
