@@ -1,10 +1,12 @@
 import asyncio
+from collections import deque
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
 import aiohttp
 import pandas as pd
 from playwright.async_api import async_playwright
+from tqdm.asyncio import tqdm
 from url_normalize import url_normalize
 from utils.logger_utils import get_logger
 
@@ -35,19 +37,26 @@ class CustomRobotFileParser(RobotFileParser):
 
 
 class WebCrawler:
-    def __init__(self, base_url, max_depth=1, max_concurrent_tasks=10):
+    def __init__(self, base_url, max_depth=1, max_concurrent_tasks=10, user_agent=None):
         self.base_url = base_url
+        self.max_depth = max_depth
+        self.user_agent = user_agent or "*"
+
         self.robot_parser = CustomRobotFileParser(base_url)
         self.visited_urls = set()
         self.found_links_data = []
         self.urls_per_depth = {}
-        self.max_depth = max_depth
+
         self.semaphore = asyncio.Semaphore(max_concurrent_tasks)
         self.session = None
+        self.progress_bar = None
+        self.queue = deque()
 
     async def __aenter__(self):
         """Create a single aiohttp session for multiple requests"""
-        self.session = await aiohttp.ClientSession().__aenter__()
+        self.session = await aiohttp.ClientSession(
+            headers={"User-Agent": self.user_agent}
+        ).__aenter__()
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
@@ -68,7 +77,7 @@ class WebCrawler:
 
     async def fetch_links(self, page, url):
         try:
-            logger.info(f"Crawling: {url}")
+            logger.debug(f"Crawling: {url}")
             await page.goto(url)
             await page.wait_for_load_state("networkidle")
             links = await page.evaluate(
@@ -76,8 +85,8 @@ class WebCrawler:
                 [...document.querySelectorAll('a[href], button[data-href], [onclick]')].map(el => el.href || el.dataset.href || el.onclick)
             """
             )
-            absolute_links = set(urljoin(url, link) for link in links)
-            logger.info(f"Found {len(absolute_links)} links on {url}")
+            absolute_links = set(url_normalize(urljoin(url, link)) for link in links)
+            logger.debug(f"Found {len(absolute_links)} links on {url}")
             return absolute_links
         except Exception as e:
             logger.error(f"Error fetching links from {url}: {e}")
@@ -122,25 +131,30 @@ class WebCrawler:
             return "unknown"
 
     async def crawl(self, url, context, depth=0):
-        async with self.semaphore:
-            if url in self.visited_urls or depth > self.max_depth:
-                return
-            self.visited_urls.add(url)
-            self.urls_per_depth[depth] = self.urls_per_depth.get(depth, 0) + 1
+        self.queue.append((url, depth))
+        while self.queue:
+            current_url, current_depth = self.queue.popleft()
+            normalized_url = url_normalize(current_url)
+            if normalized_url in self.visited_urls or current_depth > self.max_depth:
+                continue
+            self.visited_urls.add(normalized_url)
+            self.urls_per_depth[current_depth] = (
+                self.urls_per_depth.get(current_depth, 0) + 1
+            )
 
-            is_allowed = self.robot_parser.can_fetch("*", url)
+            is_allowed = self.robot_parser.can_fetch("*", normalized_url)
 
             # Determine URL type
-            url_type = await self._get_url_type(url)
+            url_type = await self._get_url_type(current_url)
 
             # Extract main endpoint
-            parsed_url = urlparse(url)
+            parsed_url = urlparse(current_url)
             main_endpoint = parsed_url.path.lstrip("/").split("/")[0]
 
             # Save the result
             self.found_links_data.append(
                 {
-                    "url": url,
+                    "url": current_url,
                     "allowed": is_allowed,
                     "type": url_type,
                     "main_endpoint": main_endpoint,
@@ -148,19 +162,22 @@ class WebCrawler:
             )
 
             if not is_allowed:
-                logger.info(f"Disallowed by robots.txt: {url}")
-                return
+                logger.info(f"Disallowed by robots.txt: {current_url}")
+                continue
 
             try:
                 page = await context.new_page()
-                links = await self.fetch_links(page, url)
+                links = await self.fetch_links(page, current_url)
                 await page.close()
 
                 for link in links:
                     if link.startswith(self.base_url) and link not in self.visited_urls:
-                        await self.crawl(link, context, depth + 1)
+                        self.queue.append((link, current_depth + 1))
             except Exception as e:
-                logger.error(f"Error crawling {url}: {e}")
+                logger.error(f"Error crawling {current_url}: {e}")
+            finally:
+                if len(self.visited_urls) % 10 == 0:
+                    self.progress_bar.update(10)
 
     def save_links_to_csv(self, filename):
         """
@@ -175,9 +192,11 @@ class WebCrawler:
             await self.load_robots_txt()
             async with async_playwright() as playwright:
                 browser = await playwright.chromium.launch(headless=True)
-                context = await browser.new_context()
+                context = await browser.new_context(user_agent=self.user_agent)
 
+                self.progress_bar = tqdm(total=self.max_depth, desc="Crawling Progress")
                 await self.crawl(self.base_url, context)
+                self.progress_bar.close()
 
                 await browser.close()
                 logger.info(
@@ -193,7 +212,7 @@ class WebCrawler:
 
 async def main():
     base_url = "https://www.aarhusvand.dk"
-    async with WebCrawler(base_url, max_depth=3) as crawler:
+    async with WebCrawler(base_url, max_depth=5) as crawler:
         await crawler.run()
 
 
