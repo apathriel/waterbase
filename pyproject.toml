@@ -18,6 +18,8 @@ langchain = "^0.3.8"
 langgraph = "^0.2.53"
 langchain-openai = "^0.2.10"
 pandas = "^2.2.3"
+python-magic = "^0.4.27"
+url-normalize = "^1.4.3"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"
