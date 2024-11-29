@@ -1,6 +1,5 @@
 import asyncio
-from collections import deque
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from urllib.robotparser import RobotFileParser
 
 import aiohttp
@@ -85,10 +84,23 @@ class WebCrawler:
             logger.debug(f"Crawling: {url}")
             await page.goto(url)
             await page.wait_for_load_state("networkidle")
+
+            # Extract canonical URL
+            canonical_url = await page.evaluate(
+                """
+                document.querySelector('link[rel="canonical"]')?.href || ''
+                """
+            )
+            if canonical_url:
+                canonical_url = url_normalize(urljoin(url, canonical_url))
+                logger.debug(f"Found canonical URL: {canonical_url}")
+                return {canonical_url}
+
+            # Extract other links
             links = await page.evaluate(
                 """
-                [...document.querySelectorAll('a[href], button[data-href], [onclick]')].map(el => el.href || el.dataset.href || el.onclick)
-            """
+                [...document.querySelectorAll('a[href]')].map(el => el.href)
+                """
             )
             absolute_links = set(url_normalize(urljoin(url, link)) for link in links)
             logger.debug(f"Found {len(absolute_links)} links on {url}")
@@ -135,11 +147,21 @@ class WebCrawler:
         else:
             return "unknown"
 
+    def remove_query_params(url, params_to_remove):
+        parsed = urlparse(url)
+        query_params = dict(parse_qsl(parsed.query))
+        filtered_query = {
+            k: v for k, v in query_params.items() if k not in params_to_remove
+        }
+        new_query = urlencode(filtered_query)
+        return urlunparse(parsed._replace(query=new_query))
+
     async def crawl(self, url, context, depth=0):
         await self.queue.put((url, depth))
         while not self.queue.empty():
             current_url, current_depth = await self.queue.get()
-            normalized_url = url_normalize(current_url)
+            filtered_url = self.remove_query_params(current_url, ["tags"])
+            normalized_url = url_normalize(filtered_url)
             if normalized_url in self.visited_urls or current_depth > self.max_depth:
                 continue
             self.visited_urls.add(normalized_url)
@@ -217,7 +239,7 @@ class WebCrawler:
 
 async def main():
     base_url = "https://www.aarhusvand.dk"
-    async with WebCrawler(base_url, max_depth=5) as crawler:
+    async with WebCrawler(base_url, max_depth=2) as crawler:
         await crawler.run()
 
 
