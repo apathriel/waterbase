@@ -85,29 +85,22 @@ class WebCrawler:
             await page.goto(url)
             await page.wait_for_load_state("networkidle")
 
-            # Extract canonical URL
-            canonical_url = await page.evaluate(
-                """
-                document.querySelector('link[rel="canonical"]')?.href || ''
-                """
-            )
-            if canonical_url:
-                canonical_url = url_normalize(urljoin(url, canonical_url))
-                logger.debug(f"Found canonical URL: {canonical_url}")
-                return {canonical_url}
+            # Extract metadata
+            metadata = await self.extract_metadata(page)
 
-            # Extract other links
+            # Extract links
             links = await page.evaluate(
                 """
                 [...document.querySelectorAll('a[href]')].map(el => el.href)
-                """
+            """
             )
             absolute_links = set(url_normalize(urljoin(url, link)) for link in links)
             logger.debug(f"Found {len(absolute_links)} links on {url}")
-            return absolute_links
+
+            return absolute_links, metadata
         except Exception as e:
             logger.error(f"Error fetching links from {url}: {e}")
-            return set()
+            return set(), {"title": "", "description": "", "pageID": ""}
 
     async def _get_url_type(self, url, fallback_to_head=False):
         parsed_url = urlparse(url)
@@ -147,7 +140,35 @@ class WebCrawler:
         else:
             return "unknown"
 
-    def remove_query_params(url, params_to_remove):
+    async def extract_metadata(self, page):
+        """Extract metadata from page including OpenGraph tags"""
+        metadata = await page.evaluate(
+            """
+            () => {
+                const getMetaContent = (selectors) => {
+                    for (const selector of selectors) {
+                        const meta = document.querySelector(selector);
+                        if (meta) {
+                            const content = meta.getAttribute('content');
+                            if (content) return content;
+                        }
+                    }
+                    return '';
+                };
+                
+                return {
+                    title: getMetaContent(['meta[name="title"]', 'meta[property="og:title"]']) || document.title,
+                    description: getMetaContent(['meta[name="description"]', 'meta[property="og:description"]']),
+                    pageID: getMetaContent(['meta[name="pageID"]']),
+                    type: getMetaContent(['meta[property="og:type"]', 'meta[name="type"]']) || 'webpage'
+                };
+            }
+            """
+        )
+
+        return metadata
+
+    def remove_query_params(self, url, params_to_remove):
         parsed = urlparse(url)
         query_params = dict(parse_qsl(parsed.query))
         filtered_query = {
@@ -170,32 +191,28 @@ class WebCrawler:
             )
 
             is_allowed = self.robot_parser.can_fetch("*", normalized_url)
-
-            # Determine URL type
             url_type = await self._get_url_type(current_url)
-
-            # Extract main endpoint
             parsed_url = urlparse(current_url)
             main_endpoint = parsed_url.path.lstrip("/").split("/")[0]
 
-            # Save the result
-            self.found_links_data.append(
-                {
-                    "url": current_url,
-                    "allowed": is_allowed,
-                    "type": url_type,
-                    "main_endpoint": main_endpoint,
-                }
-            )
-
-            if not is_allowed:
-                logger.info(f"Disallowed by robots.txt: {current_url}")
-                continue
-
             try:
                 page = await context.new_page()
-                links = await self.fetch_links(page, current_url)
+                links, metadata = await self.fetch_links(page, current_url)
                 await page.close()
+
+                # Save the result with metadata
+                self.found_links_data.append(
+                    {
+                        "url": current_url,
+                        "allowed": is_allowed,
+                        "type": metadata["type"],
+                        "inferred_type": url_type,
+                        "main_endpoint": main_endpoint,
+                        "title": metadata["title"],
+                        "description": metadata["description"],
+                        "pageID": metadata["pageID"],
+                    }
+                )
 
                 for link in links:
                     if link.startswith(self.base_url) and link not in self.visited_urls:
@@ -239,7 +256,7 @@ class WebCrawler:
 
 async def main():
     base_url = "https://www.aarhusvand.dk"
-    async with WebCrawler(base_url, max_depth=2) as crawler:
+    async with WebCrawler(base_url, max_depth=4) as crawler:
         await crawler.run()
 
 
