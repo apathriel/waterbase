@@ -6,7 +6,7 @@ from sqlalchemy import Boolean, Column, DateTime, String, Text, create_engine
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from utils.logging_utils import get_logger
+from utils.logger_utils import get_logger
 
 Base = declarative_base()
 
@@ -72,13 +72,19 @@ class DatabaseManager:
                 },
             )
 
-            self.connection.execute(upsert_stmt)
-            self.connection.commit()
-            self.logger.debug(f"Flushed batch of {len(self._batch)} records")
-            self._batch.clear()
+            try:
+                self.connection.execute(upsert_stmt)
+                self.connection.commit()
+                self.logger.info(f"Flushed batch of {len(self._batch)} records")
+            except Exception as e:
+                self.logger.error(f"Error in batch flush: {e}")
+                await self.rollback()
+                raise
+            finally:
+                self._batch.clear()
         except Exception as e:
             self.logger.error(f"Error flushing batch: {e}")
-            self._batch.clear()
+            await self.rollback()
             raise
 
     def close_database_connection(self):
@@ -86,8 +92,10 @@ class DatabaseManager:
             if self._batch:
                 self.flush_batch()
             if self.connection:
+                self.connection.rollback()  # Ensure any pending transaction is rolled back
                 self.connection.close()
             if self.session_instance:
+                self.session_instance.rollback()  # Ensure any pending transaction is rolled back
                 self.session_instance.close()
             self.logger.info("Database connections closed")
         except Exception as e:
