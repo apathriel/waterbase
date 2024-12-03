@@ -14,12 +14,11 @@ python = "^3.12"
 tqdm = "^4.66.6"
 notebook = "^7.2.2"
 python-dotenv = "^1.0.1"
-langchain = "^0.3.8"
-langgraph = "^0.2.53"
-langchain-openai = "^0.2.10"
 pandas = "^2.2.3"
-python-magic = "^0.4.27"
 url-normalize = "^1.4.3"
+readability = "^0.3.1"
+asyncpg = "^0.30.0"
+sqlalchemy = {extras = ["asyncio"], version = "^2.0.36"}
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"
@@ -31,9 +30,15 @@ requests = "^2.32.3"
 playwright = "^1.48.0"
 
 [tool.poetry.group.ai.dependencies]
-langchain = "^0.3.7"
-langchain-openai = "^0.2.8"
+langgraph = "^0.2.53"
+langchain-openai = "^0.2.10"
+langchain = "^0.3.8"
 langserve = { extras = ["all"], version = "^0.3.0" }
+
+
+[tool.poetry.group.database.dependencies]
+sqlalchemy = "^2.0.36"
+psycopg2-binary = "^2.9.10"
 
 [tool.isort]
 profile = "black"
