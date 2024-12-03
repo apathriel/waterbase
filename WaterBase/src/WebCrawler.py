@@ -1,20 +1,17 @@
 import asyncio
+import os
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 from urllib.robotparser import RobotFileParser
 
 import aiohttp
-import pandas as pd
+from DatabaseManager import CrawledLink, DatabaseManager
+from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 from tqdm.asyncio import tqdm
 from url_normalize import url_normalize
 from utils.logger_utils import get_logger
 
 logger = get_logger(__name__, "INFO")
-
-
-class DatabaseManager:
-    def __init__():
-        pass
 
 
 class CustomRobotFileParser(RobotFileParser):
@@ -41,7 +38,14 @@ class CustomRobotFileParser(RobotFileParser):
 
 
 class WebCrawler:
-    def __init__(self, base_url, max_depth=1, max_concurrent_tasks=50, user_agent=None):
+    def __init__(
+        self,
+        base_url,
+        max_depth=1,
+        max_concurrent_tasks=50,
+        user_agent=None,
+        db_url=None,
+    ):
         self.base_url = base_url
         self.max_depth = max_depth
         self.user_agent = user_agent or "*"
@@ -56,6 +60,8 @@ class WebCrawler:
         self.progress_bar = None
         self.queue = asyncio.Queue()
 
+        self.db_manager = DatabaseManager(connection_string=db_url)
+
     async def __aenter__(self):
         """Create a single aiohttp session for multiple requests"""
         self.session = await aiohttp.ClientSession(
@@ -64,7 +70,11 @@ class WebCrawler:
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
-        """Properly close the aiohttp session"""
+        """Properly close the aiohttp session and database connection"""
+        if exc_type is not None:
+            # Handle any exceptions that occurred
+            logger.error(f"Error occurred: {exc}")
+            await self.db_manager.rollback()  # Add rollback on error
         await self.session.close()
 
     async def load_robots_txt(self):
@@ -109,7 +119,7 @@ class WebCrawler:
         # Use extensions for common types
         if any(path.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".gif", ".bmp"]):
             return "image"
-        if any(path.endswith(ext) for ext in [".pdf", ".doc", ".docx"]):
+        if any(path.endswith(ext) for ext in [".pdf", ".doc", ".docx", ".xlsx"]):
             return "document"
         if any(path.endswith(ext) for ext in [".mp4", ".avi", ".mov", ".mkv"]):
             return "video"
@@ -200,19 +210,18 @@ class WebCrawler:
                 links, metadata = await self.fetch_links(page, current_url)
                 await page.close()
 
-                # Save the result with metadata
-                self.found_links_data.append(
-                    {
-                        "url": current_url,
-                        "allowed": is_allowed,
-                        "type": metadata["type"],
-                        "inferred_type": url_type,
-                        "main_endpoint": main_endpoint,
-                        "title": metadata["title"],
-                        "description": metadata["description"],
-                        "pageID": metadata["pageID"],
-                    }
-                )
+                # Create CrawledLink compatible dictionary
+                link_data = {
+                    "url": normalized_url,  # Use normalized URL as primary key
+                    "allowed": is_allowed,
+                    "type": metadata.get("type", "webpage"),
+                    "inferred_type": url_type,
+                    "main_endpoint": main_endpoint,
+                    "title": metadata.get("title", ""),
+                    "description": metadata.get("description", ""),
+                    "pageID": metadata.get("pageID", ""),
+                }
+                await self.db_manager.add_crawled_link(link_data)
 
                 for link in links:
                     if link.startswith(self.base_url) and link not in self.visited_urls:
@@ -222,14 +231,6 @@ class WebCrawler:
             finally:
                 if len(self.visited_urls) % 10 == 0:
                     self.progress_bar.update(10)
-
-    def save_links_to_csv(self, filename):
-        """
-        Save results to CSV using Pandas.
-        """
-        logger.info(f"Saving results to {filename}...")
-        df = pd.DataFrame(self.found_links_data)
-        df.to_csv(filename, index=False)
 
     async def run(self):
         try:
@@ -242,21 +243,25 @@ class WebCrawler:
                 await self.crawl(self.base_url, context)
                 self.progress_bar.close()
 
+                # Ensure final batch is saved
+                await self.db_manager.flush_batch()
                 await browser.close()
-                logger.info(
-                    f"Crawl completed. Found {len(self.found_links_data)} links."
-                )
-                logger.info(f"Total unique links discovered: {len(self.visited_urls)}")
+
+                logger.info(f"Crawl completed. Found {len(self.visited_urls)} links.")
                 logger.info(f"URLs crawled per depth: {self.urls_per_depth}")
         except KeyboardInterrupt:
-            logger.warning("Crawl interrupted. Saving progress...")
+            logger.warning("Crawl interrupted. Saving final batch...")
+            await self.db_manager.flush_batch()
         finally:
-            self.save_links_to_csv("crawled_links.csv")
+            self.db_manager.close_database_connection()
 
 
 async def main():
-    base_url = "https://www.aarhusvand.dk"
-    async with WebCrawler(base_url, max_depth=4) as crawler:
+    load_dotenv()
+
+    base_url = os.getenv("BASE_URL")
+    database_url = os.getenv("SQLALCHEMY_DATABASE_URL")
+    async with WebCrawler(base_url, max_depth=4, db_url=database_url) as crawler:
         await crawler.run()
 
 
