@@ -104,7 +104,9 @@ class WebCrawler:
                 [...document.querySelectorAll('a[href]')].map(el => el.href)
             """
             )
-            absolute_links = set(url_normalize(urljoin(url, link)) for link in links)
+            absolute_links = set(
+                url_normalize(urljoin(url, link)) for link in links if "#" not in link
+            )
             logger.debug(f"Found {len(absolute_links)} links on {url}")
 
             return absolute_links, metadata
@@ -165,7 +167,7 @@ class WebCrawler:
                     }
                     return '';
                 };
-                
+
                 return {
                     title: getMetaContent(['meta[name="title"]', 'meta[property="og:title"]']) || document.title,
                     description: getMetaContent(['meta[name="description"]', 'meta[property="og:description"]']),
