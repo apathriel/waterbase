@@ -181,10 +181,19 @@ class WebScraper:
 
 def main():
     db_url = os.getenv("SQLALCHEMY_DATABASE_URL")
-    with WebScraper(db_url) as scraper:
+    db_manager = DatabaseManager(connection_string=db_url)
+    sampled_links = db_manager.sample_records_by_group(
+        model=CrawledLink, group_attr="main_endpoint", sample_size=3, filters=None
+    )
+
+    for endpoint, links in sampled_links.items():
+        print(f"Endpoint: {endpoint}")
+        for link in links:
+            print(f"  - {link.url}")
+    """ with WebScraper(db_url) as scraper:
         scraper.load_links_to_scrape(limit=5)
         print(scraper.links_to_scrape[3])
-        print(scraper.extract_content(scraper.links_to_scrape[3].url))
+        print(scraper.extract_content(scraper.links_to_scrape[3].url)) """
 
 
 if __name__ == "__main__":
