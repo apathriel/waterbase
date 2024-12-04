@@ -95,6 +95,21 @@ class DatabaseManager:
         if len(self._batch) >= self.batch_size:
             await self.flush_batch()
 
+    def fetch_links_with_content(
+        self, model: Type, limit: Optional[int] = None, filters: Optional[List] = None
+    ) -> List:
+        with self.Session() as session:
+            query = select(model).where(
+                or_(model.site_content != "", model.site_content.isnot(None))
+            )
+            if filters:
+                for condition in filters:
+                    query = query.where(condition)
+            if limit:
+                query = query.limit(limit)
+            result = session.execute(query)
+            return result.scalars().all()
+
     def fetch_links_without_content(
         self, model: Type, limit: Optional[int] = None, filters: Optional[List] = None
     ) -> List:
