@@ -39,15 +39,15 @@ class HTMLChunker:
             connection=pgvector_db_url,
             embeddings=self.embedding_model,
             embedding_length=1536,
-            collection_name="embeddings",
+            pre_delete_collection=True,
+            collection_name="embeddings_500_50",
             use_jsonb=True,
             logger=self.logger,
         )
         self.documents: List[CrawledLink] = []
         self.headers_to_split_on = headers_to_split_on or [
             ("h1", "Header 1"),
-            ("h2", "Header 2"),
-            ("h3", "Header 3"),
+            ("avds-accordion", "Folder"),
         ]
         self.splitter: HTMLHeaderTextSplitter = HTMLHeaderTextSplitter(
             self.headers_to_split_on, return_each_element=True
@@ -69,7 +69,12 @@ class HTMLChunker:
         self.loader = HTMLStringLoader(sql_item)
         return self.loader.load()
 
-    def run(self):
+    def generate_embeddings_from_raw_html_content(self):
+        self.documents = self.fetch_documents(num_docs_to_fetch=None)
+        for doc in tqdm(self.documents, desc="Processing documents"):
+            pass
+
+    def generate_embeddings_by_html_header(self):
         self.documents = self.fetch_documents(num_docs_to_fetch=None)
         for doc in tqdm(self.documents, desc="Processing documents"):
             data = self.load_document(doc)
@@ -109,9 +114,9 @@ def main():
     load_dotenv()
     db_url = os.getenv("SQLALCHEMY_DATABASE_URL")
     vector_db_url = os.getenv("PGVECTOR_DATABASE_URL")
-    chunking_config = ChunkingConfigurations(chunk_size=250, chunk_overlap=25)
+    chunking_config = ChunkingConfigurations(chunk_size=500, chunk_overlap=50)
     chunker = HTMLChunker(db_url, vector_db_url, chunking_config)
-    chunker.run()
+    chunker.generate_embeddings_by_html_header()
 
 
 if __name__ == "__main__":
