@@ -18,9 +18,11 @@ pandas = "^2.2.3"
 url-normalize = "^1.4.3"
 readability = "^0.3.1"
 asyncpg = "^0.30.0"
-sqlalchemy = {extras = ["asyncio"], version = "^2.0.36"}
+sqlalchemy = { extras = ["asyncio"], version = "^2.0.36" }
 lxml = "^5.3.0"
 langchain-community = "^0.3.9"
+langchain-postgres = "^0.0.12"
+psycopg = { extras = ["binary"], version = "^3.2.3" }
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"
@@ -40,7 +42,6 @@ langserve = { extras = ["all"], version = "^0.3.0" }
 
 [tool.poetry.group.database.dependencies]
 sqlalchemy = "^2.0.36"
-psycopg2-binary = "^2.9.10"
 
 [tool.isort]
 profile = "black"
