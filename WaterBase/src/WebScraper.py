@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import List, Optional
 
 from bs4 import BeautifulSoup, Comment
 from DatabaseManager import CrawledLink, DatabaseManager
@@ -12,48 +13,23 @@ class HTMLParser:
     def __init__(self):
         self.logger = get_logger(self.__class__.__name__, "INFO")
 
-    def extract_html_metadata(self, html_content, url=None):
+    def extract_html_metadata(self, soup, url=None):
         try:
-            soup = BeautifulSoup(html_content, "html.parser")
             title = soup.title.string.strip() if soup.title else "No Title"
-            author = soup.find("meta", {"name": "author"})
-            author = author["content"].strip() if author else "Unknown"
-            publication_date = soup.find("meta", {"name": "publication_date"})
-            publication_date = (
-                publication_date["content"].strip() if publication_date else "Unknown"
-            )
             description = soup.find("meta", {"name": "description"})
             description = (
                 description["content"].strip() if description else "No Description"
             )
-            keywords = soup.find("meta", {"name": "keywords"})
-            keywords = keywords["content"].strip() if keywords else "No Keywords"
-            language = soup.find("html")["lang"] if soup.find("html") else "Unknown"
 
-            metadata = {
-                "title": title,
-                "author": author,
-                "publication_date": publication_date,
-                "description": description,
-                "keywords": keywords,
-                "url": url,
-                "language": language,
-            }
-
-            # Create <meta> tags
-            meta_tags = f"""
+            metadata_html = f"""
             <head>
-                <meta name="title" content="{title}">
-                <meta name="author" content="{author}">
-                <meta name="publication_date" content="{publication_date}">
+                <title>{title}</title>
                 <meta name="description" content="{description}">
-                <meta name="keywords" content="{keywords}">
-                <meta name="url" content="{url}">
-                <meta name="language" content="{language}">
+                <meta name="source" content="{url}">
             </head>
             """
 
-            return meta_tags
+            return metadata_html
         except Exception as e:
             return f"<head><meta name='error' content='An error occurred: {e}'></head>"
 
@@ -81,10 +57,19 @@ class HTMLParser:
                 element.extract()
 
     def extract_html_content(
-        self, html_content, tags_to_remove=None, unwrap_divs: bool = False
+        self,
+        html_content,
+        tags_to_remove: List[str] = None,
+        include_metadata=True,
+        source_url=None,
     ):
         try:
             soup = BeautifulSoup(html_content, "html.parser")
+
+            if include_metadata:
+                metadata = self.extract_html_metadata(soup, url=source_url)
+            else:
+                metadata = {}
 
             # Remove HTML comments
             for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
@@ -142,7 +127,7 @@ class HTMLParser:
             self.flatten_single_child_divs(soup)
             self.remove_all_attributes(soup)
 
-            content = ""
+            content = metadata
             for element in soup.find_all(
                 ["body"],
                 recursive=True,
@@ -174,15 +159,18 @@ class WebScraper:
         self.logger = get_logger(self.__class__.__name__, "INFO")
         self.links_to_scrape = []
         self.html_parser = HTMLParser()
+        self.browser = None
 
     def __enter__(self):
+        self.playwright = sync_playwright().start()
+        self.browser = self.playwright.chromium.launch(headless=True)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
-
-    def load_links_to_scrape(self, limit=5):
-        self.links_to_scrape = self.db_manager.fetch_links_without_content(limit)
+        if self.browser:
+            self.browser.close()
+        if self.playwright:
+            self.playwright.stop()
 
     def load_endpoint_sample_to_scrape(self, limit=3, output_dir="out"):
         sampled_links = self.db_manager.sample_records_by_group(
@@ -202,45 +190,46 @@ class WebScraper:
                     with open(file_path, "w", encoding="utf-8") as file:
                         file.write(content_data)
 
+    def save_content_to_file(
+        self, content, endpoint_dir="no_endpoint", page_id="0000", output_dir="out"
+    ):
+        output_path = Path(f"{output_dir}/{endpoint_dir}")
+        output_path.mkdir(parents=True, exist_ok=True)
+        with open(output_path / f"{page_id}.html", "w", encoding="utf-8") as file:
+            file.write(content)
+
     def extract_content(self, url):
         try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                page = browser.new_page()
-                page.goto(url)
-                content = page.content()
-                browser.close()
-                return self.html_parser.extract_html_content(content)
+            page = self.browser.new_page()
+            page.goto(url)
+            content = page.content()
+            page.close()
+            return self.html_parser.extract_html_content(
+                content, source_url=url, include_metadata=True
+            )
         except Exception as e:
             self.logger.error(f"Error extracting content from {url}: {e}")
             return {"title": "", "content": ""}
 
-    def run(self, limit=None):
-        self.load_links_to_scrape(limit)
+    def run(self, num_items_to_read: Optional[int] = None):
+        self.links_to_scrape = self.db_manager.fetch_links_without_content(
+            model=CrawledLink,
+            filters=[CrawledLink.allowed == True],
+            limit=num_items_to_read,
+        )
         for link in self.links_to_scrape:
             self.logger.info(f"Scraping: {link.url}")
             content_data = self.extract_content(link.url)
+
             # Update the database entry with the extracted content
-            self.db_manager.update_crawled_link(
-                link.url,
-                {
-                    "title": content_data.get("title") or link.title,
-                    "content": content_data.get("content"),
-                },
-            )
+            self.db_manager.update_site_content(link.url, content_data)
 
 
 def main():
     load_dotenv()
     db_url = os.getenv("SQLALCHEMY_DATABASE_URL")
     with WebScraper(db_url) as scraper:
-        scraper.load_endpoint_sample_to_scrape()
-        # scraper.run(limit=5)
-
-    """ with WebScraper(db_url) as scraper:
-        scraper.load_links_to_scrape(limit=5)
-        print(scraper.links_to_scrape[3])
-        print(scraper.extract_content(scraper.links_to_scrape[3].url)) """
+        scraper.run()
 
 
 if __name__ == "__main__":
