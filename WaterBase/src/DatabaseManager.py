@@ -2,7 +2,7 @@ import os
 import random
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Type
+from typing import Any, Dict, List, Optional, Type
 
 from sqlalchemy import (
     Boolean,
@@ -13,6 +13,7 @@ from sqlalchemy import (
     create_engine,
     or_,
     select,
+    update,
 )
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.declarative import declarative_base
@@ -71,16 +72,39 @@ class DatabaseManager:
             self.logger.error(f"Database connection error: {e}")
             raise
 
+    def update_site_content(self, url: str, new_content: str):
+        with self.Session() as session:
+            try:
+                stmt = (
+                    update(CrawledLink)
+                    .where(CrawledLink.url == url)
+                    .values(
+                        site_content=new_content, updated_at=datetime.now(timezone.utc)
+                    )
+                )
+                session.execute(stmt)
+                session.commit()
+                self.logger.info(f"Updated site_content for URL: {url}")
+            except Exception as e:
+                session.rollback()
+                self.logger.error(f"Error updating site_content for URL {url}: {e}")
+                raise
+
     async def add_crawled_link(self, data: Dict):
         self._batch.append(data)
         if len(self._batch) >= self.batch_size:
             await self.flush_batch()
 
-    def fetch_links_without_content(self, limit=None):
+    def fetch_links_without_content(
+        self, model: Type, limit: Optional[int] = None, filters: Optional[List] = None
+    ) -> List:
         with self.Session() as session:
-            query = select(CrawledLink).where(
-                or_(CrawledLink.site_content == "", CrawledLink.site_content.is_(None))
+            query = select(model).where(
+                or_(model.site_content == "", model.site_content.is_(None))
             )
+            if filters:
+                for condition in filters:
+                    query = query.where(condition)
             if limit:
                 query = query.limit(limit)
             result = session.execute(query)
