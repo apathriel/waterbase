@@ -3,6 +3,7 @@
 # Implement rewrite
 # Implement multi query
 # Implement document grading
+# Add PDFs to the database
 
 import os
 import pprint
@@ -106,11 +107,7 @@ def main():
     # Compile the graph
     graph = graph_builder.compile()
 
-    inputs = {
-        "messages": [
-            ("user", "Hvad er danmarks hovedstad?"),
-        ]
-    }
+    inputs = {"messages": [HumanMessage(content="Hvad er Water Living Lab?")]}
     for output in graph.stream(inputs):
         for key, value in output.items():
             pprint.pprint(f"Output from node '{key}':")
