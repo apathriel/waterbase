@@ -9,6 +9,7 @@ import os
 import uuid
 from typing import Annotated, List, Sequence, TypedDict
 
+import streamlit as st
 from dotenv import load_dotenv
 from langchain.tools.retriever import create_retriever_tool
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -120,6 +121,17 @@ def main():
         # Compile the graph
         graph = graph_builder.compile(checkpointer=checkpointer)
         config = {"configurable": {"thread_id": str(uuid.uuid4())}}
+
+        first_msg = graph.invoke(
+            {HumanMessage(content="Hvad er Water Living Lab?")}, config
+        )
+
+        second_msg = graph.invoke(
+            {HumanMessage(content="Hvor er det baseret henne?")}, config
+        )
+
+        print(first_msg)
+        print(second_msg)
 
 
 if __name__ == "__main__":
