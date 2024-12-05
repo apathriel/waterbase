@@ -1,7 +1,6 @@
 import os
 
 from dotenv import load_dotenv
-from langchain import hub
 from langchain_core.documents import Document
 from langchain_core.messages import SystemMessage
 from langchain_core.tools import tool
@@ -32,14 +31,14 @@ def main():
     vector_store: PGVector = PGVector(
         connection=pgvector_db_url,
         embeddings=OpenAIEmbeddings(model="text-embedding-3-small"),
-        collection_name="embeddings_500_50",
+        collection_name="embeddings_raw_750_50",
         use_jsonb=True,
     )
 
     @tool(response_format="content_and_artifact")
     def retrieve(query: str):
         """Retrieve information related to a query."""
-        retrieved_docs = vector_store.similarity_search(query, k=2)
+        retrieved_docs = vector_store.similarity_search(query, k=5)
         serialized = "\n\n".join(
             (f"Source: {doc.metadata}\n" f"Content: {doc.page_content}")
             for doc in retrieved_docs
@@ -107,7 +106,7 @@ def main():
 
     graph = graph_builder.compile()
 
-    input_message = "Hvordan ved jeg hvor meget jeg betaler for vand hos aarhusvand?"
+    input_message = "Hvad er Water Living Lab?"
 
     for step in graph.stream(
         {"messages": [{"role": "user", "content": input_message}]},
