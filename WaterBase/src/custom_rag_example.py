@@ -6,7 +6,7 @@
 # Add PDFs to the database
 
 import os
-import pprint
+import uuid
 from typing import Annotated, List, Sequence, TypedDict
 
 from dotenv import load_dotenv
@@ -17,9 +17,12 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools.simple import Tool
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_postgres import PGVector
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
+from psycopg import Connection
 
 
 class AgentState(TypedDict):
@@ -68,6 +71,7 @@ def main():
     # Load environment variables
     load_dotenv()
     pgvector_db_url = os.getenv("PGVECTOR_DATABASE_URL")
+    base_db_url = os.getenv("DATABASE_URL")
 
     vector_store: PGVector = PGVector(
         connection=pgvector_db_url,
@@ -104,16 +108,18 @@ def main():
     graph_builder.add_edge("retrieve", "generate")
     graph_builder.add_edge("generate", END)
 
-    # Compile the graph
-    graph = graph_builder.compile()
+    connection_kwargs = {
+        "autocommit": True,
+        "prepare_threshold": 0,
+    }
 
-    inputs = {"messages": [HumanMessage(content="Hvad er Water Living Lab?")]}
-    for output in graph.stream(inputs):
-        for key, value in output.items():
-            pprint.pprint(f"Output from node '{key}':")
-            pprint.pprint("---")
-            pprint.pprint(value, indent=2, width=80, depth=None)
-        pprint.pprint("\n---\n")
+    # with PostgresSaver.from_conn_string(base_db_url) as checkpointer:
+    with Connection.connect(base_db_url, **connection_kwargs) as conn:
+        checkpointer = PostgresSaver(conn)
+        # checkpointer.setup()
+        # Compile the graph
+        graph = graph_builder.compile(checkpointer=checkpointer)
+        config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
 
 if __name__ == "__main__":
