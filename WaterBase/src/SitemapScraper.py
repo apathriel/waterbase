@@ -14,14 +14,6 @@ from .utils.logger_utils import get_logger
 logger = get_logger(__name__, "INFO")
 
 
-class ContentAnalyzer:
-    def __init__(self, headless: bool = True):
-        self.headless = headless
-
-    def analyze_page(self):
-        pass
-
-
 class SitemapScraper:
     def __init__(self, headless: bool = False):
         self.headless = headless
@@ -93,6 +85,7 @@ class SitemapScraper:
     def parse_sitemap(
         self, sitemap_url: Optional[str] = None, sitemap_file_path: Optional[str] = None
     ) -> Optional[List[str]]:
+        sitemap = None  # Initialize sitemap to None
         if sitemap_url:
             sitemap = self.fetch_sitemap_by_url(sitemap_url)
         elif sitemap_file_path:
